@@ -180,7 +180,7 @@ const processedSlotDates = new Set()
 /** @type {Record<string, boolean>} */
 const roomTimerStarted = {}
 
-const SESSION_DURATION_SECONDS = 45 * 60
+const SESSION_DURATION_SECONDS = 120 * 60
 
 const VALID_DIFFICULTY_PREFS = new Set(["Easy", "Medium", "Hard", "Random"])
 const VALID_TOPIC_PREFS = new Set([
