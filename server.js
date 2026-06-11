@@ -17,7 +17,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.join(__dirname, ".env") })
 
 const PORT = process.env.PORT || 3001
-const CLIENT_URLS = ["http://localhost:5173", "http://localhost:5174"]
+const allowedOrigins = [
+  "https://peercode.live",
+  "https://www.peercode.live",
+  "http://localhost:5173",
+]
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -36,7 +40,7 @@ const SCHEDULED_SLOT_TIMES = [
 ]
 
 const app = express()
-app.use(cors({ origin: CLIENT_URLS }))
+app.use(cors({ origin: allowedOrigins }))
 app.use(express.json())
 
 app.get("/health", (_req, res) => {
@@ -87,7 +91,7 @@ app.post("/api/emails/booking-confirmation", async (req, res) => {
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: {
-    origin: CLIENT_URLS,
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
   },
 })
@@ -763,7 +767,7 @@ checkScheduledMatching()
 
 httpServer.listen(PORT, () => {
   console.log(`[server] PeerCode matching server running on http://localhost:${PORT}`)
-  console.log(`[server] Socket.io CORS allowed for ${CLIENT_URLS.join(", ")}`)
+  console.log(`[server] Socket.io CORS allowed for ${allowedOrigins.join(", ")}`)
   console.log("[email] Resend key loaded:", !!process.env.RESEND_API_KEY)
   if (!supabase) {
     console.warn(
