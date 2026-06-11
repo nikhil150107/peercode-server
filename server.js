@@ -52,7 +52,7 @@ app.get("/health", (_req, res) => {
   })
 })
 
-app.post("/api/emails/booking-confirmation", async (req, res) => {
+async function handleSendBookingEmail(req, res) {
   try {
     const { userEmail, slotTime, slotDate, slotId } = req.body ?? {}
 
@@ -72,7 +72,7 @@ app.post("/api/emails/booking-confirmation", async (req, res) => {
 
     if (!result.ok) {
       console.error(
-        "[email] booking-confirmation failed:",
+        "[email] booking confirmation failed:",
         result.error ?? "unknown error",
       )
       return res.status(500).json({ ok: false, error: "Failed to send email" })
@@ -80,13 +80,16 @@ app.post("/api/emails/booking-confirmation", async (req, res) => {
 
     return res.json({ ok: true })
   } catch (err) {
-    console.error("[email] booking-confirmation error:", err)
+    console.error("[email] booking confirmation error:", err)
     return res.status(500).json({
       ok: false,
       error: err instanceof Error ? err.message : "Internal server error",
     })
   }
-})
+}
+
+app.post("/api/emails/booking-confirmation", handleSendBookingEmail)
+app.post("/api/emails/send-booking-email", handleSendBookingEmail)
 
 const httpServer = createServer(app)
 const io = new Server(httpServer, {

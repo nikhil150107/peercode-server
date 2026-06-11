@@ -124,24 +124,18 @@ export async function sendBookingConfirmation(
   userEmail,
   slotTime,
   date,
-  slotId,
+  _slotId,
 ) {
-  const resolvedSlotId = slotId || slotIdForTime(slotTime)
   const dateLabel = formatDateLabel(date)
-  const waitingUrl = `${getClientUrl()}/waiting?slot=${resolvedSlotId}&date=${date}`
+  const dateAndTime = `${dateLabel} at ${slotTime} IST`
 
   const html = emailLayout(
-    `Interview booked for ${slotTime}`,
-    `<p>Your slot is confirmed for <strong style="color:#fafafa;">${dateLabel}</strong> at <strong style="color:#fafafa;">${slotTime} IST</strong>.</p>
-     <p>We'll match you with a peer at that time. Make sure to be online <strong style="color:#fafafa;">5 minutes before</strong> your session starts.</p>
-     ${buttonHtml(waitingUrl, "Open waiting room")}`,
+    "Slot booked",
+    `<p>Your slot has been booked for <strong style="color:#fafafa;">${dateAndTime}</strong>.</p>
+     <p>We'll notify you as soon as a peer is matched!</p>`,
   )
 
-  return sendEmail(
-    userEmail,
-    `Your PeerCode interview is booked for ${slotTime}`,
-    html,
-  )
+  return sendEmail(userEmail, "Slot Booked — PeerCode", html)
 }
 
 export async function sendMatchConfirmation(
@@ -149,38 +143,23 @@ export async function sendMatchConfirmation(
   user2Email,
   roomId,
   slotTime,
-  topicPref,
-  difficultyPref,
+  _topicPref,
+  _difficultyPref,
 ) {
   const interviewUrl = `${getClientUrl()}/interview?room=${roomId}`
-  const topic = topicPref || "Any"
-  const difficulty = difficultyPref || "Random"
+  const subject = "Peer Matched — PeerCode"
 
-  const interviewerHtml = emailLayout(
-    "Match found — you're the interviewer",
-    `<p>You've been matched with a peer! Your session is ready to start.</p>
-     <p><strong style="color:#fafafa;">Session time:</strong> ${slotTime} IST<br />
-     <strong style="color:#fafafa;">Topic:</strong> ${topic}<br />
-     <strong style="color:#fafafa;">Difficulty:</strong> ${difficulty}</p>
-     <p>As the <strong style="color:#fafafa;">interviewer</strong>, you'll see hints to guide your peer. Ask clarifying questions and help them think through the problem — don't give away the answer.</p>
-     ${buttonHtml(interviewUrl, "Join room")}`,
+  const html = emailLayout(
+    "Peer matched",
+    `<p>Great news! You've been matched with a peer for your session at <strong style="color:#fafafa;">${slotTime} IST</strong>.</p>
+     <p>Click here to join:</p>
+     ${buttonHtml(interviewUrl, "Join room")}
+     <p style="margin-top:16px;font-size:13px;color:#71717a;word-break:break-all;">${interviewUrl}</p>`,
   )
-
-  const intervieweeHtml = emailLayout(
-    "Match found — good luck!",
-    `<p>You've been matched with a peer! Your session is ready to start.</p>
-     <p><strong style="color:#fafafa;">Session time:</strong> ${slotTime} IST<br />
-     <strong style="color:#fafafa;">Topic:</strong> ${topic}<br />
-     <strong style="color:#fafafa;">Difficulty:</strong> ${difficulty}</p>
-     <p>As the <strong style="color:#fafafa;">interviewee</strong>, you'll solve the coding challenge in the shared editor. Think out loud, ask questions, and do your best — <strong style="color:#34d399;">good luck!</strong></p>
-     ${buttonHtml(interviewUrl, "Join room")}`,
-  )
-
-  const subject = "Match found! Your PeerCode interview starts now"
 
   const [result1, result2] = await Promise.all([
-    sendEmail(user1Email, subject, interviewerHtml),
-    sendEmail(user2Email, subject, intervieweeHtml),
+    sendEmail(user1Email, subject, html),
+    sendEmail(user2Email, subject, html),
   ])
 
   return { user1: result1, user2: result2 }
