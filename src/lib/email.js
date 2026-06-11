@@ -146,6 +146,9 @@ export async function sendMatchConfirmation(
   _topicPref,
   _difficultyPref,
 ) {
+  console.log(
+    `[email] sendMatchConfirmation called — user1=${user1Email} user2=${user2Email} room=${roomId}`,
+  )
   const interviewUrl = `${getClientUrl()}/interview?room=${roomId}`
   const subject = "Peer Matched — PeerCode"
 

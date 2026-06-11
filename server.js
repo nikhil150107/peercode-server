@@ -226,12 +226,29 @@ function computeSessionStartMs(slotTime, slotDate) {
     month - 1,
     day,
     parsed.hours - 5,
-    parsed.mutes - 30,
+    parsed.minutes - 30,
     0,
   )
 }
 
 const MATCH_BEFORE_MS = 3 * 60 * 1000
+const UNMATCHED_CANCEL_AFTER_MS = 3 * 60 * 1000
+
+function isInMatchWindow(slotTime, slotDate) {
+  const slotStartMs = computeSessionStartMs(slotTime, slotDate)
+  if (slotStartMs == null) return false
+  const now = Date.now()
+  return (
+    now >= slotStartMs - MATCH_BEFORE_MS &&
+    now <= slotStartMs + UNMATCHED_CANCEL_AFTER_MS
+  )
+}
+
+function shouldCancelUnmatched(slotTime, slotDate) {
+  const slotStartMs = computeSessionStartMs(slotTime, slotDate)
+  if (slotStartMs == null) return false
+  return Date.now() >= slotStartMs + UNMATCHED_CANCEL_AFTER_MS
+}
 
 function sendFetchQuestionToUser(
   userId,
@@ -509,6 +526,40 @@ function emitMatchToPair(user1, user2, roomId, slotTime) {
   )
 }
 
+async function notifyUserIfAlreadyMatched(userId, slotTime, slotDate, socket) {
+  if (!supabase) return
+
+  const { data: booking, error } = await supabase
+    .from("slot_bookings")
+    .select("room_id, matched_with, status")
+    .eq("user_id", userId)
+    .eq("slot_time", slotTime)
+    .eq("slot_date", slotDate)
+    .eq("status", "matched")
+    .maybeSingle()
+
+  if (error) {
+    console.error(
+      `[match] Failed to check existing match for ${userId}:`,
+      error.message,
+    )
+    return
+  }
+
+  if (!booking?.room_id || !booking.matched_with) return
+
+  const peerEmail = await fetchUserEmail(booking.matched_with)
+  socket.emit("match_found", {
+    roomId: booking.room_id,
+    peerId: booking.matched_with,
+    peerEmail: peerEmail ?? "your peer",
+    slotTime,
+  })
+  console.log(
+    `[match] Re-sent match_found to ${userId} for room ${booking.room_id}`,
+  )
+}
+
 async function matchUsersForSlot(slotTime, slotDate) {
   if (!supabase) {
     console.warn("[scheduler] Supabase not configured — skipping matchUsersForSlot")
@@ -531,9 +582,14 @@ async function matchUsersForSlot(slotTime, slotDate) {
   }
 
   if (!bookings || bookings.length === 0) {
-    console.log(`[scheduler] No waiting users for ${slotTime} on ${slotDate}`)
+    console.log(`[scheduler] No pending bookings for ${slotTime} on ${slotDate}`)
     return
   }
+
+  console.log(
+    `[scheduler] Found ${bookings.length} pending booking(s) for ${slotTime} on ${slotDate}:`,
+    bookings.map((b) => b.user_id),
+  )
 
   const key = poolKey(slotTime, slotDate)
   const matchedUserIds = new Set()
@@ -551,6 +607,7 @@ async function matchUsersForSlot(slotTime, slotDate) {
         room_id: roomId,
       })
       .eq("id", booking1.id)
+      .eq("status", "pending")
 
     const { error: update2Error } = await supabase
       .from("slot_bookings")
@@ -560,6 +617,7 @@ async function matchUsersForSlot(slotTime, slotDate) {
         room_id: roomId,
       })
       .eq("id", booking2.id)
+      .eq("status", "pending")
 
     if (update1Error || update2Error) {
       console.error("[scheduler] Failed to update bookings:", update1Error?.message, update2Error?.message)
@@ -594,11 +652,11 @@ async function matchUsersForSlot(slotTime, slotDate) {
       slotDate,
     }
 
-    if (user1.socketId && user2.socketId) {
+    if (user1.socketId || user2.socketId) {
       emitMatchToPair(user1, user2, roomId, slotTime)
     } else {
       console.log(
-        `[scheduler] Pair matched in DB (room ${roomId}) but one or both users offline — emails still sent`,
+        `[scheduler] Pair matched in DB (room ${roomId}) but both users offline — emails still sent`,
       )
     }
 
@@ -612,6 +670,9 @@ async function matchUsersForSlot(slotTime, slotDate) {
       "Random"
 
     if (user1Email && user2Email) {
+      console.log(
+        `[email] Sending match confirmation — user1=${user1Email} user2=${user2Email} room=${roomId} slot=${slotTime}`,
+      )
       const emailResult = await sendMatchConfirmation(
         user1Email,
         user2Email,
@@ -620,6 +681,7 @@ async function matchUsersForSlot(slotTime, slotDate) {
         topicPref,
         difficultyPref,
       )
+      console.log("[email] Match confirmation results:", emailResult)
 
       if (!emailResult.user1?.ok || !emailResult.user2?.ok) {
         console.error("[scheduler] Match confirmation email failed:", emailResult)
@@ -643,22 +705,28 @@ async function matchUsersForSlot(slotTime, slotDate) {
   )
 
   if (unmatchedBookings.length > 0) {
-    console.log(
-      `[scheduler] ${unmatchedBookings.length} unmatched user(s) for ${slotTime} on ${slotDate}`,
-    )
-
-    for (const booking of unmatchedBookings) {
-      const poolEntry = waitingPool[key]?.find(
-        (u) => u.userId === booking.user_id,
+    if (shouldCancelUnmatched(slotTime, slotDate)) {
+      console.log(
+        `[scheduler] ${unmatchedBookings.length} unmatched user(s) for ${slotTime} on ${slotDate} — cancelling after slot window`,
       )
-      await handleUnmatchedUser(booking, slotTime, slotDate, poolEntry)
-    }
 
-    if (waitingPool[key]) {
-      waitingPool[key] = waitingPool[key].filter((u) =>
-        matchedUserIds.has(u.userId),
+      for (const booking of unmatchedBookings) {
+        const poolEntry = waitingPool[key]?.find(
+          (u) => u.userId === booking.user_id,
+        )
+        await handleUnmatchedUser(booking, slotTime, slotDate, poolEntry)
+      }
+
+      if (waitingPool[key]) {
+        waitingPool[key] = waitingPool[key].filter((u) =>
+          matchedUserIds.has(u.userId),
+        )
+        if (waitingPool[key].length === 0) delete waitingPool[key]
+      }
+    } else {
+      console.log(
+        `[scheduler] ${unmatchedBookings.length} user(s) still pending for ${slotTime} on ${slotDate} — waiting for more peers`,
       )
-      if (waitingPool[key].length === 0) delete waitingPool[key]
     }
   }
 }
@@ -669,18 +737,22 @@ function checkScheduledMatching() {
 
   for (const slotTime of SCHEDULED_SLOT_TIMES) {
     const checkKey = `${slotTime}-${today}`
-    if (processedSlotDates.has(checkKey)) continue
 
     const slotStartMs = computeSessionStartMs(slotTime, today)
     if (slotStartMs == null) continue
 
     const matchAtMs = slotStartMs - MATCH_BEFORE_MS
     if (now >= matchAtMs) {
-      processedSlotDates.add(checkKey)
-      console.log(
-        `[scheduler] Running matchUsersForSlot for ${slotTime} IST on ${today} (${Math.round((slotStartMs - now) / 60_000)} min before slot)`,
-      )
+      if (!processedSlotDates.has(checkKey)) {
+        console.log(
+          `[scheduler] Match window open for ${slotTime} IST on ${today} (${Math.round((slotStartMs - now) / 60_000)} min before slot)`,
+        )
+      }
       void matchUsersForSlot(slotTime, today)
+
+      if (now >= slotStartMs + UNMATCHED_CANCEL_AFTER_MS) {
+        processedSlotDates.add(checkKey)
+      }
     }
   }
 }
@@ -728,6 +800,15 @@ io.on("connection", (socket) => {
     console.log(
       `[join_waiting] ${userEmail} (${userId}) registered for "${key}" — ${waitingPool[key].length} in pool (scheduled match)`,
     )
+
+    void notifyUserIfAlreadyMatched(userId, slotTime, date, socket)
+
+    if (isInMatchWindow(slotTime, date)) {
+      console.log(
+        `[join_waiting] Match window active for ${key} — running matchUsersForSlot`,
+      )
+      void matchUsersForSlot(slotTime, date)
+    }
   },
   )
 
