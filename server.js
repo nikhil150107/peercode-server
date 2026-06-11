@@ -359,7 +359,7 @@ async function handleUnmatchedUser(booking, slotTime, slotDate, poolEntry) {
     .from("slot_bookings")
     .update({ status: "cancelled" })
     .eq("id", booking.id)
-    .eq("status", "waiting")
+    .eq("status", "pending")
 
   if (cancelError) {
     console.error(
@@ -462,7 +462,7 @@ async function matchUsersForSlot(slotTime, slotDate) {
     .select("id, user_id, slot_time, slot_date")
     .eq("slot_time", slotTime)
     .eq("slot_date", slotDate)
-    .eq("status", "waiting")
+    .eq("status", "pending")
     .order("created_at", { ascending: true })
 
   if (error) {
