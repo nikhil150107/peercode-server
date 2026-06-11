@@ -129,6 +129,11 @@ const userSocketMap = {}
 /** @type {Set<string>} */
 const processedSlotDates = new Set()
 
+/** @type {Record<string, boolean>} */
+const roomTimerStarted = {}
+
+const SESSION_DURATION_SECONDS = 45 * 60
+
 const VALID_DIFFICULTY_PREFS = new Set(["Easy", "Medium", "Hard", "Random"])
 const VALID_TOPIC_PREFS = new Set([
   "Any",
@@ -235,6 +240,19 @@ function clearRoomState(roomId) {
   delete roomPeerTopicPrefs[roomId]
   delete roomDifficultyPref[roomId]
   delete roomTopicPref[roomId]
+  delete roomTimerStarted[roomId]
+}
+
+function emitStartTimerIfReady(roomId) {
+  if (!roomPeers[roomId] || roomPeers[roomId].size < 2) return
+  if (roomTimerStarted[roomId]) return
+
+  roomTimerStarted[roomId] = true
+  io.to(roomId).emit("start_timer", {
+    roomId,
+    durationSeconds: SESSION_DURATION_SECONDS,
+  })
+  console.log(`[timer] start_timer emitted for room ${roomId}`)
 }
 
 function poolKey(slotTime, slotDate) {
@@ -281,6 +299,21 @@ function removeFromAllRooms(socketId) {
 async function fetchUserEmail(userId) {
   if (!supabase) return null
 
+  try {
+    const { data, error } = await supabase.auth.admin.getUserById(userId)
+    if (!error && data?.user?.email) {
+      return data.user.email
+    }
+    if (error) {
+      console.error(
+        `[match] auth.admin.getUserById failed for ${userId}:`,
+        error.message,
+      )
+    }
+  } catch (err) {
+    console.error(`[match] auth.admin.getUserById error for ${userId}:`, err)
+  }
+
   const { data, error } = await supabase
     .from("profiles")
     .select("email")
@@ -288,7 +321,10 @@ async function fetchUserEmail(userId) {
     .maybeSingle()
 
   if (error) {
-    console.error(`[match] Failed to fetch email for ${userId}:`, error.message)
+    console.error(
+      `[match] Failed to fetch profile email for ${userId}:`,
+      error.message,
+    )
     return null
   }
 
@@ -415,22 +451,25 @@ async function matchUsersForSlot(slotTime, slotDate) {
     const poolEntry1 = waitingPool[key]?.find((u) => u.userId === booking1.user_id)
     const poolEntry2 = waitingPool[key]?.find((u) => u.userId === booking2.user_id)
 
-    const [email1, email2] = await Promise.all([
-      poolEntry1?.userEmail ?? fetchUserEmail(booking1.user_id),
-      poolEntry2?.userEmail ?? fetchUserEmail(booking2.user_id),
+    const [authEmail1, authEmail2] = await Promise.all([
+      fetchUserEmail(booking1.user_id),
+      fetchUserEmail(booking2.user_id),
     ])
+
+    const user1Email = authEmail1 ?? poolEntry1?.userEmail ?? null
+    const user2Email = authEmail2 ?? poolEntry2?.userEmail ?? null
 
     const user1 = {
       userId: booking1.user_id,
       socketId: poolEntry1?.socketId ?? userSocketMap[booking1.user_id],
-      userEmail: email1 ?? "peer@peercode.app",
+      userEmail: user1Email,
       slotDate,
     }
 
     const user2 = {
       userId: booking2.user_id,
       socketId: poolEntry2?.socketId ?? userSocketMap[booking2.user_id],
-      userEmail: email2 ?? "peer@peercode.app",
+      userEmail: user2Email,
       slotDate,
     }
 
@@ -451,14 +490,31 @@ async function matchUsersForSlot(slotTime, slotDate) {
       poolEntry1?.difficultyPreference ??
       "Random"
 
-    void sendMatchConfirmation(
-      user1.userEmail,
-      user2.userEmail,
-      roomId,
-      slotTime,
-      topicPref,
-      difficultyPref,
-    )
+    if (user1Email && user2Email) {
+      const emailResult = await sendMatchConfirmation(
+        user1Email,
+        user2Email,
+        roomId,
+        slotTime,
+        topicPref,
+        difficultyPref,
+      )
+
+      if (!emailResult.user1?.ok || !emailResult.user2?.ok) {
+        console.error("[scheduler] Match confirmation email failed:", emailResult)
+      } else {
+        console.log(
+          `[email] Match confirmation sent to ${user1Email} and ${user2Email}`,
+        )
+      }
+    } else {
+      console.error("[scheduler] Skipping match emails — missing addresses", {
+        user1Email,
+        user2Email,
+        booking1: booking1.user_id,
+        booking2: booking2.user_id,
+      })
+    }
   }
 }
 
@@ -583,6 +639,7 @@ io.on("connection", (socket) => {
     if (peers.length >= 2) {
       io.to(roomId).emit("room_ready", { roomId, peers })
       console.log(`[join_room] Room ${roomId} ready — both peers connected`)
+      emitStartTimerIfReady(roomId)
       maybeTriggerQuestionFetch(roomId)
     }
   })
@@ -769,6 +826,10 @@ httpServer.listen(PORT, () => {
   console.log(`[server] PeerCode matching server running on http://localhost:${PORT}`)
   console.log(`[server] Socket.io CORS allowed for ${allowedOrigins.join(", ")}`)
   console.log("[email] Resend key loaded:", !!process.env.RESEND_API_KEY)
+  console.log(
+    "[email] Resend from:",
+    process.env.RESEND_FROM_EMAIL || "PeerCode <onboarding@resend.dev>",
+  )
   if (!supabase) {
     console.warn(
       "[server] SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY not set — scheduled DB matching disabled",
