@@ -12,6 +12,7 @@ import {
   sendMatchConfirmation,
   sendNoMatchFound,
 } from "./src/lib/email.js"
+import { executeOnJudge0 } from "./src/lib/judge0.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.join(__dirname, ".env") })
@@ -135,6 +136,46 @@ async function handleFeedback(req, res) {
 }
 
 app.post("/api/feedback", handleFeedback)
+
+async function handleExecute(req, res) {
+  try {
+    const { code, language, stdin } = req.body ?? {}
+
+    if (!code || typeof code !== "string") {
+      return res.status(400).json({
+        ok: false,
+        error: "code is required",
+      })
+    }
+
+    if (!language) {
+      return res.status(400).json({
+        ok: false,
+        error: "language is required (python, javascript, java, cpp)",
+      })
+    }
+
+    const result = await executeOnJudge0(code, language, stdin ?? "")
+
+    return res.json({
+      ok: true,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+      compile_output: result.compile_output ?? "",
+      message: result.message ?? "",
+      status: result.status,
+      status_id: result.status_id,
+    })
+  } catch (err) {
+    console.error("[execute] error:", err)
+    return res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : "Execution failed",
+    })
+  }
+}
+
+app.post("/api/execute", handleExecute)
 
 async function handleSessionRatingReceived(req, res) {
   try {
