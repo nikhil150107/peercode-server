@@ -91,6 +91,51 @@ async function handleSendBookingEmail(req, res) {
 app.post("/api/emails/booking-confirmation", handleSendBookingEmail)
 app.post("/api/emails/send-booking-email", handleSendBookingEmail)
 
+async function handleFeedback(req, res) {
+  try {
+    const { message, name, userId } = req.body ?? {}
+
+    if (!message || typeof message !== "string" || !message.trim()) {
+      return res.status(400).json({
+        ok: false,
+        error: "message is required",
+      })
+    }
+
+    if (!supabase) {
+      return res.status(503).json({
+        ok: false,
+        error: "Database not configured",
+      })
+    }
+
+    const { error } = await supabase.from("feedback").insert({
+      message: message.trim(),
+      name: typeof name === "string" && name.trim() ? name.trim() : null,
+      user_id: typeof userId === "string" && userId ? userId : null,
+    })
+
+    if (error) {
+      console.error("[feedback] insert failed:", error.message)
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to save feedback",
+      })
+    }
+
+    console.log("[feedback] Saved feedback from", userId ?? "anonymous")
+    return res.json({ ok: true })
+  } catch (err) {
+    console.error("[feedback] error:", err)
+    return res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : "Internal server error",
+    })
+  }
+}
+
+app.post("/api/feedback", handleFeedback)
+
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: {
