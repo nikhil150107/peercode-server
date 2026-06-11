@@ -165,20 +165,32 @@ export async function sendMatchConfirmation(
   return { user1: result1, user2: result2 }
 }
 
-export async function sendNoMatchFound(userEmail, slotTime, slotDate) {
-  const dateLabel = formatDateLabel(slotDate)
-  const dashboardUrl = `${getClientUrl()}/dashboard`
+export async function sendNoMatchFound(
+  userEmail,
+  userName,
+  slotTime,
+  slotDate,
+  { isToday = true } = {},
+) {
+  const shareUrl = getClientUrl()
+  const whenLabel = isToday ? "today" : `on ${formatDateLabel(slotDate)}`
+  const greetingName = userName?.trim() || "there"
 
   const html = emailLayout(
-    `No match found for your ${slotTime} slot`,
-    `<p>Unfortunately we couldn't find a match for your <strong style="color:#fafafa;">${slotTime}</strong> slot on <strong style="color:#fafafa;">${dateLabel}</strong>.</p>
-     <p>Book another slot and we'll try again!</p>
-     ${buttonHtml(dashboardUrl, "Book another slot")}`,
+    "No peer match this time",
+    `<p>Hey <strong style="color:#fafafa;">${greetingName}</strong>! 👋</p>
+     <p>We're sorry — we weren't able to find a peer for your session at <strong style="color:#fafafa;">${slotTime}</strong> ${whenLabel}. 😔</p>
+     <p>But don't worry! The more people who join PeerCode, the better the chances of getting matched instantly.</p>
+     <p>👉 Share PeerCode with your friends and classmates:<br />
+     <a href="${shareUrl}" style="color:#34d399;">${shareUrl}</a></p>
+     <p>The more peers join, the faster everyone gets matched!</p>
+     <p>We'll see you at the next slot. Keep grinding! 💪</p>
+     <p>— Team PeerCode</p>`,
   )
 
   return sendEmail(
     userEmail,
-    `No match found for your ${slotTime} slot`,
+    "We couldn't find a peer this time — PeerCode",
     html,
   )
 }

@@ -334,6 +334,78 @@ async function fetchUserEmail(userId) {
   return data?.email ?? null
 }
 
+async function fetchUserName(userId) {
+  if (!supabase) return null
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("username")
+    .eq("user_id", userId)
+    .maybeSingle()
+
+  if (error) {
+    console.error(
+      `[match] Failed to fetch profile name for ${userId}:`,
+      error.message,
+    )
+    return null
+  }
+
+  return data?.username?.trim() || null
+}
+
+async function handleUnmatchedUser(booking, slotTime, slotDate, poolEntry) {
+  const { error: cancelError } = await supabase
+    .from("slot_bookings")
+    .update({ status: "cancelled" })
+    .eq("id", booking.id)
+    .eq("status", "waiting")
+
+  if (cancelError) {
+    console.error(
+      `[scheduler] Failed to cancel unmatched booking ${booking.id}:`,
+      cancelError.message,
+    )
+    return
+  }
+
+  const [authEmail, profileName] = await Promise.all([
+    fetchUserEmail(booking.user_id),
+    fetchUserName(booking.user_id),
+  ])
+
+  const userEmail = authEmail ?? poolEntry?.userEmail ?? null
+  const displayName =
+    profileName ??
+    (userEmail ? userEmail.split("@")[0] : "there")
+
+  if (!userEmail) {
+    console.error(
+      `[scheduler] Skipping no-match email — no email for user ${booking.user_id}`,
+    )
+    return
+  }
+
+  const result = await sendNoMatchFound(
+    userEmail,
+    displayName,
+    slotTime,
+    slotDate,
+    { isToday: slotDate === getTodayISTDate() },
+  )
+
+  if (!result.ok) {
+    console.error(
+      `[scheduler] No-match email failed for ${userEmail}:`,
+      result.error ?? "unknown error",
+    )
+  } else {
+    console.log(
+      `[email] No-match email sent to ${userEmail} for ${slotTime} on ${slotDate}`,
+    )
+  }
+}
+
 function emitMatchToPair(user1, user2, roomId, slotTime) {
   const socket1 = io.sockets.sockets.get(user1.socketId)
   const socket2 = io.sockets.sockets.get(user2.socketId)
@@ -403,25 +475,8 @@ async function matchUsersForSlot(slotTime, slotDate) {
     return
   }
 
-  if (bookings.length === 1) {
-    const loneBooking = bookings[0]
-    console.log(
-      `[scheduler] Only 1 waiting user for ${slotTime} on ${slotDate} — no match`,
-    )
-
-    const userEmail =
-      waitingPool[poolKey(slotTime, slotDate)]?.find(
-        (u) => u.userId === loneBooking.user_id,
-      )?.userEmail ?? (await fetchUserEmail(loneBooking.user_id))
-
-    if (userEmail) {
-      void sendNoMatchFound(userEmail, slotTime, slotDate)
-    }
-
-    return
-  }
-
   const key = poolKey(slotTime, slotDate)
+  const matchedUserIds = new Set()
 
   for (let i = 0; i + 1 < bookings.length; i += 2) {
     const booking1 = bookings[i]
@@ -450,6 +505,9 @@ async function matchUsersForSlot(slotTime, slotDate) {
       console.error("[scheduler] Failed to update bookings:", update1Error?.message, update2Error?.message)
       continue
     }
+
+    matchedUserIds.add(booking1.user_id)
+    matchedUserIds.add(booking2.user_id)
 
     const poolEntry1 = waitingPool[key]?.find((u) => u.userId === booking1.user_id)
     const poolEntry2 = waitingPool[key]?.find((u) => u.userId === booking2.user_id)
@@ -517,6 +575,30 @@ async function matchUsersForSlot(slotTime, slotDate) {
         booking1: booking1.user_id,
         booking2: booking2.user_id,
       })
+    }
+  }
+
+  const unmatchedBookings = bookings.filter(
+    (booking) => !matchedUserIds.has(booking.user_id),
+  )
+
+  if (unmatchedBookings.length > 0) {
+    console.log(
+      `[scheduler] ${unmatchedBookings.length} unmatched user(s) for ${slotTime} on ${slotDate}`,
+    )
+
+    for (const booking of unmatchedBookings) {
+      const poolEntry = waitingPool[key]?.find(
+        (u) => u.userId === booking.user_id,
+      )
+      await handleUnmatchedUser(booking, slotTime, slotDate, poolEntry)
+    }
+
+    if (waitingPool[key]) {
+      waitingPool[key] = waitingPool[key].filter((u) =>
+        matchedUserIds.has(u.userId),
+      )
+      if (waitingPool[key].length === 0) delete waitingPool[key]
     }
   }
 }
