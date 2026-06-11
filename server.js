@@ -157,21 +157,36 @@ function getTodayISTDate() {
   }).format(new Date())
 }
 
-function getCurrentISTSlotTime() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Kolkata",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).formatToParts(new Date())
+function parseSlotHoursMinutes(slotTime) {
+  const match = slotTime.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
+  if (!match) return null
 
-  const hour = parts.find((p) => p.type === "hour")?.value ?? "0"
-  const minute = parts.find((p) => p.type === "minute")?.value ?? "00"
-  const dayPeriod =
-    parts.find((p) => p.type === "dayPeriod")?.value?.toUpperCase() ?? "AM"
+  let hours = parseInt(match[1], 10)
+  const minutes = parseInt(match[2], 10)
+  const period = match[3].toUpperCase()
 
-  return `${hour}:${minute} ${dayPeriod}`
+  if (period === "PM" && hours !== 12) hours += 12
+  if (period === "AM" && hours === 12) hours = 0
+
+  return { hours, minutes }
 }
+
+function computeSessionStartMs(slotTime, slotDate) {
+  const parsed = parseSlotHoursMinutes(slotTime)
+  if (!parsed) return null
+
+  const [year, month, day] = slotDate.split("-").map(Number)
+  return Date.UTC(
+    year,
+    month - 1,
+    day,
+    parsed.hours - 5,
+    parsed.mutes - 30,
+    0,
+  )
+}
+
+const MATCH_BEFORE_MS = 3 * 60 * 1000
 
 function sendFetchQuestionToUser(
   userId,
@@ -604,17 +619,25 @@ async function matchUsersForSlot(slotTime, slotDate) {
 }
 
 function checkScheduledMatching() {
-  const slotTime = getCurrentISTSlotTime()
+  const now = Date.now()
   const today = getTodayISTDate()
 
-  if (!SCHEDULED_SLOT_TIMES.includes(slotTime)) return
+  for (const slotTime of SCHEDULED_SLOT_TIMES) {
+    const checkKey = `${slotTime}-${today}`
+    if (processedSlotDates.has(checkKey)) continue
 
-  const checkKey = `${slotTime}-${today}`
-  if (processedSlotDates.has(checkKey)) return
+    const slotStartMs = computeSessionStartMs(slotTime, today)
+    if (slotStartMs == null) continue
 
-  processedSlotDates.add(checkKey)
-  console.log(`[scheduler] Slot time reached: ${slotTime} IST on ${today}`)
-  void matchUsersForSlot(slotTime, today)
+    const matchAtMs = slotStartMs - MATCH_BEFORE_MS
+    if (now >= matchAtMs) {
+      processedSlotDates.add(checkKey)
+      console.log(
+        `[scheduler] Running matchUsersForSlot for ${slotTime} IST on ${today} (${Math.round((slotStartMs - now) / 60_000)} min before slot)`,
+      )
+      void matchUsersForSlot(slotTime, today)
+    }
+  }
 }
 
 io.on("connection", (socket) => {
