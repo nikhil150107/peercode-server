@@ -8,6 +8,11 @@ export const JUDGE0_LANGUAGE_IDS = {
   javascript: 63,
   java: 62,
   cpp: 54,
+  c: 50,
+  go: 60,
+  rust: 73,
+  kotlin: 78,
+  csharp: 51,
 }
 
 function decodeBase64Field(value) {

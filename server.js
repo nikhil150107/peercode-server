@@ -177,6 +177,215 @@ async function handleExecute(req, res) {
 
 app.post("/api/execute", handleExecute)
 
+function defaultRoomLiveState() {
+  return {
+    question: null,
+    codes: {},
+    language: "python",
+    secondsLeft: 120 * 60,
+    timerStarted: false,
+    timerStartedAt: null,
+    chatMessages: [],
+    ended: false,
+    endedBy: null,
+  }
+}
+
+/** @type {Record<string, ReturnType<typeof defaultRoomLiveState>>} */
+const roomLiveCache = {}
+
+function toClientRoomState(state) {
+  return {
+    question: state.question,
+    codes: state.codes ?? {},
+    language: state.language ?? "python",
+    secondsLeft: state.secondsLeft ?? 120 * 60,
+    timerStarted: Boolean(state.timerStarted),
+    timerStartedAt: state.timerStartedAt ?? null,
+    chatMessages: state.chatMessages ?? [],
+    ended: Boolean(state.ended),
+  }
+}
+
+async function loadRoomLiveState(roomId) {
+  if (roomLiveCache[roomId]) {
+    return roomLiveCache[roomId]
+  }
+
+  const fallback = defaultRoomLiveState()
+
+  if (!supabase) {
+    roomLiveCache[roomId] = fallback
+    return fallback
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("room_live_state")
+      .select("*")
+      .eq("room_id", roomId)
+      .maybeSingle()
+
+    if (error || !data) {
+      roomLiveCache[roomId] = fallback
+      return fallback
+    }
+
+    const state = {
+      question: data.question ?? null,
+      codes: data.codes ?? {},
+      language: data.language ?? "python",
+      secondsLeft: data.seconds_left ?? 120 * 60,
+      timerStarted: Boolean(data.timer_started),
+      timerStartedAt: data.timer_started_at
+        ? new Date(data.timer_started_at).getTime()
+        : null,
+      chatMessages: data.chat_messages ?? [],
+      ended: Boolean(data.ended_at),
+      endedBy: data.ended_by ?? null,
+    }
+
+    roomLiveCache[roomId] = state
+    return state
+  } catch (err) {
+    console.error("[room_state] load failed:", err)
+    roomLiveCache[roomId] = fallback
+    return fallback
+  }
+}
+
+async function persistRoomLiveState(roomId, state) {
+  roomLiveCache[roomId] = state
+
+  if (!supabase) return
+
+  try {
+    const row = {
+      room_id: roomId,
+      question: state.question,
+      codes: state.codes ?? {},
+      language: state.language ?? "python",
+      seconds_left: state.secondsLeft ?? 120 * 60,
+      timer_started: Boolean(state.timerStarted),
+      timer_started_at: state.timerStartedAt
+        ? new Date(state.timerStartedAt).toISOString()
+        : null,
+      chat_messages: state.chatMessages ?? [],
+      ended_at: state.ended ? new Date().toISOString() : null,
+      ended_by: state.endedBy ?? null,
+      updated_at: new Date().toISOString(),
+    }
+
+    const { error } = await supabase.from("room_live_state").upsert(row)
+    if (error) {
+      console.error("[room_state] persist failed:", error.message)
+    }
+  } catch (err) {
+    console.error("[room_state] persist error:", err)
+  }
+}
+
+async function patchRoomLiveState(roomId, patch) {
+  const state = await loadRoomLiveState(roomId)
+  if (patch.question !== undefined) state.question = patch.question
+  if (patch.codes !== undefined) {
+    state.codes = { ...(state.codes ?? {}), ...patch.codes }
+  }
+  if (patch.language !== undefined) state.language = patch.language
+  if (patch.secondsLeft !== undefined) state.secondsLeft = patch.secondsLeft
+  if (patch.timerStarted !== undefined) state.timerStarted = patch.timerStarted
+  if (patch.timerStartedAt !== undefined) {
+    state.timerStartedAt = patch.timerStartedAt
+  }
+  if (patch.chatMessages !== undefined) {
+    state.chatMessages = patch.chatMessages
+  }
+  if (patch.ended !== undefined) state.ended = patch.ended
+  if (patch.endedBy !== undefined) state.endedBy = patch.endedBy
+  await persistRoomLiveState(roomId, state)
+  return state
+}
+
+async function handleGetRoomState(req, res) {
+  try {
+    const { roomId } = req.params
+    if (!roomId) {
+      return res.status(400).json({ ok: false, error: "roomId is required" })
+    }
+    const state = await loadRoomLiveState(roomId)
+    return res.json({ ok: true, state: toClientRoomState(state) })
+  } catch (err) {
+    console.error("[room_state] GET failed:", err)
+    return res.status(500).json({ ok: false, error: "Failed to load room state" })
+  }
+}
+
+async function handleGetRoomEnded(req, res) {
+  try {
+    const { roomId } = req.params
+    if (!roomId) {
+      return res.status(400).json({ ok: false, error: "roomId is required" })
+    }
+    const state = await loadRoomLiveState(roomId)
+    return res.json({ ok: true, ended: Boolean(state.ended) })
+  } catch (err) {
+    console.error("[room_state] ended check failed:", err)
+    return res.status(500).json({ ok: false, error: "Failed to check room status" })
+  }
+}
+
+async function handlePutRoomState(req, res) {
+  try {
+    const { roomId } = req.params
+    const { userId, patch } = req.body ?? {}
+
+    if (!roomId) {
+      return res.status(400).json({ ok: false, error: "roomId is required" })
+    }
+
+    const existing = await loadRoomLiveState(roomId)
+    if (existing.ended) {
+      return res.status(410).json({ ok: false, error: "Session has ended" })
+    }
+
+    const state = await patchRoomLiveState(roomId, patch ?? {})
+    console.log("[room_state] saved", { roomId, userId })
+    return res.json({ ok: true, state: toClientRoomState(state) })
+  } catch (err) {
+    console.error("[room_state] PUT failed:", err)
+    return res.status(500).json({ ok: false, error: "Failed to save room state" })
+  }
+}
+
+async function handleEndRoomSession(req, res) {
+  try {
+    const { roomId } = req.params
+    const { userId } = req.body ?? {}
+
+    if (!roomId) {
+      return res.status(400).json({ ok: false, error: "roomId is required" })
+    }
+
+    const state = await patchRoomLiveState(roomId, {
+      ended: true,
+      endedBy: userId ?? null,
+    })
+
+    io.to(roomId).emit("session_ended", { roomId, from: userId ?? null })
+    console.log("[room_state] session ended", { roomId, userId })
+
+    return res.json({ ok: true, state: toClientRoomState(state) })
+  } catch (err) {
+    console.error("[room_state] end failed:", err)
+    return res.status(500).json({ ok: false, error: "Failed to end session" })
+  }
+}
+
+app.get("/api/room/:roomId/state", handleGetRoomState)
+app.get("/api/room/:roomId/ended", handleGetRoomEnded)
+app.put("/api/room/:roomId/state", handlePutRoomState)
+app.post("/api/room/:roomId/end", handleEndRoomSession)
+
 async function handleSessionRatingReceived(req, res) {
   try {
     const { peerId, roomId, rating, raterUserId } = req.body ?? {}
@@ -457,14 +666,38 @@ function clearRoomState(roomId) {
   delete roomTimerStarted[roomId]
 }
 
-function emitStartTimerIfReady(roomId) {
+async function emitStartTimerIfReady(roomId) {
   if (!roomPeers[roomId] || roomPeers[roomId].size < 2) return
+
+  const liveState = await loadRoomLiveState(roomId)
+
+  if (liveState.timerStarted && liveState.timerStartedAt) {
+    roomTimerStarted[roomId] = true
+    const elapsed = Math.floor((Date.now() - liveState.timerStartedAt) / 1000)
+    const remaining = Math.max(0, SESSION_DURATION_SECONDS - elapsed)
+    io.to(roomId).emit("start_timer", {
+      roomId,
+      durationSeconds: remaining,
+      timerStartedAt: liveState.timerStartedAt,
+    })
+    console.log(`[timer] restored timer for room ${roomId} (${remaining}s left)`)
+    return
+  }
+
   if (roomTimerStarted[roomId]) return
 
   roomTimerStarted[roomId] = true
+  const startedAt = Date.now()
+  await patchRoomLiveState(roomId, {
+    timerStarted: true,
+    timerStartedAt: startedAt,
+    secondsLeft: SESSION_DURATION_SECONDS,
+  })
+
   io.to(roomId).emit("start_timer", {
     roomId,
     durationSeconds: SESSION_DURATION_SECONDS,
+    timerStartedAt: startedAt,
   })
   console.log(`[timer] start_timer emitted for room ${roomId}`)
 }
@@ -959,17 +1192,31 @@ io.on("connection", (socket) => {
     console.log(`[leave_waiting] ${userId} left pool "${key}"`)
   })
 
-  socket.on("join_room", ({ roomId, userId }) => {
+  socket.on("join_room", async ({ roomId, userId }) => {
     if (!roomId || !userId) return
 
-    const hasStoredQuestion = Boolean(roomQuestions[roomId])
+    const liveState = await loadRoomLiveState(roomId)
+    if (liveState.ended) {
+      console.log(`[join_room] room ${roomId} has ended — rejecting ${userId}`)
+      socket.emit("session_ended", { roomId })
+      return
+    }
+
+    const hasStoredQuestion = Boolean(
+      roomQuestions[roomId] ?? liveState.question,
+    )
     console.log("[join_room] received", {
       roomId,
       socketId: socket.id,
       userId,
       hasStoredQuestion,
-      storedQuestionTitle: roomQuestions[roomId]?.title ?? null,
+      storedQuestionTitle:
+        roomQuestions[roomId]?.title ?? liveState.question?.title ?? null,
     })
+
+    if (liveState.question && !roomQuestions[roomId]) {
+      roomQuestions[roomId] = liveState.question
+    }
 
     socket.join(roomId)
 
@@ -997,6 +1244,11 @@ io.on("connection", (socket) => {
       roomId,
       peerCount: peers.length,
       isFirstPeer,
+    })
+
+    socket.emit("room_state_sync", {
+      roomId,
+      state: toClientRoomState(liveState),
     })
 
     if (prevPeerCount === 1 && peers.length === 2) {
@@ -1059,7 +1311,7 @@ io.on("connection", (socket) => {
   },
   )
 
-  socket.on("question_selected", ({ roomId, question, userId }) => {
+  socket.on("question_selected", async ({ roomId, question, userId }) => {
     if (!roomId || !question || !userId) return
 
     console.log("[question_selected] received", {
@@ -1070,6 +1322,7 @@ io.on("connection", (socket) => {
     })
 
     roomQuestions[roomId] = question
+    await patchRoomLiveState(roomId, { question })
     console.log(`[question_selected] stored "${question.title}" for room ${roomId}`)
 
     io.to(roomId).emit("question_selected", {
@@ -1093,8 +1346,14 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("webrtc_ice_candidate", { candidate, from: userId })
   })
 
-  socket.on("code_change", ({ roomId, code, language, userId }) => {
+  socket.on("code_change", async ({ roomId, code, language, userId }) => {
     if (!roomId || !userId) return
+
+    await patchRoomLiveState(roomId, {
+      codes: { [language]: code },
+      language,
+    })
+
     socket.to(roomId).emit("code_change", { code, language, from: userId })
   })
 
@@ -1116,6 +1375,42 @@ io.on("connection", (socket) => {
     console.log(`[code_output] ${userId} shared output in room ${roomId} (${roomSize} sockets)`)
 
     socket.to(roomId).emit("code_output", payload)
+  })
+
+  socket.on(
+    "chat_message",
+    async ({ roomId, userId, text, senderName }) => {
+      if (!roomId || !userId || !text?.trim()) return
+
+      const state = await loadRoomLiveState(roomId)
+      if (state.ended) return
+
+      const message = {
+        id: uuidv4(),
+        text: text.trim(),
+        senderName: senderName?.trim() || "Peer",
+        from: userId,
+        at: Date.now(),
+      }
+
+      const chatMessages = [...(state.chatMessages ?? []), message]
+      await patchRoomLiveState(roomId, { chatMessages })
+
+      socket.to(roomId).emit("chat_message", { roomId, message })
+      console.log(`[chat] message in room ${roomId} from ${userId}`)
+    },
+  )
+
+  socket.on("end_session", async ({ roomId, userId }) => {
+    if (!roomId) return
+
+    await patchRoomLiveState(roomId, {
+      ended: true,
+      endedBy: userId ?? null,
+    })
+
+    io.to(roomId).emit("session_ended", { roomId, from: userId ?? null })
+    console.log(`[session] ended via socket in room ${roomId}`, { userId })
   })
 
   socket.on(
