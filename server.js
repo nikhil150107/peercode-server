@@ -201,12 +201,20 @@ function defaultRoomLiveState() {
 /** @type {Record<string, ReturnType<typeof defaultRoomLiveState>>} */
 const roomLiveCache = {}
 
+const SESSION_DURATION_SECONDS = 120 * 60
+
 function toClientRoomState(state) {
+  let secondsLeft = state.secondsLeft ?? SESSION_DURATION_SECONDS
+  if (state.timerStarted && state.timerStartedAt) {
+    const elapsed = Math.floor((Date.now() - state.timerStartedAt) / 1000)
+    secondsLeft = Math.max(0, SESSION_DURATION_SECONDS - elapsed)
+  }
+
   return {
     question: state.question,
     codes: state.codes ?? {},
     language: state.language ?? "python",
-    secondsLeft: state.secondsLeft ?? 120 * 60,
+    secondsLeft,
     timerStarted: Boolean(state.timerStarted),
     timerStartedAt: state.timerStartedAt ?? null,
     chatMessages: state.chatMessages ?? [],
@@ -294,7 +302,14 @@ async function persistRoomLiveState(roomId, state) {
 
 async function patchRoomLiveState(roomId, patch) {
   const state = await loadRoomLiveState(roomId)
-  if (patch.question !== undefined) state.question = patch.question
+  if (patch.question !== undefined) {
+    if (state.question && patch.question?.id !== state.question?.id) {
+      // Question is locked for the session once set.
+      delete patch.question
+    } else {
+      state.question = patch.question
+    }
+  }
   if (patch.codes !== undefined) {
     state.codes = { ...(state.codes ?? {}), ...patch.codes }
   }
@@ -303,6 +318,10 @@ async function patchRoomLiveState(roomId, patch) {
   if (patch.timerStarted !== undefined) state.timerStarted = patch.timerStarted
   if (patch.timerStartedAt !== undefined) {
     state.timerStartedAt = patch.timerStartedAt
+  }
+  if (state.timerStarted && state.timerStartedAt) {
+    const elapsed = Math.floor((Date.now() - state.timerStartedAt) / 1000)
+    state.secondsLeft = Math.max(0, SESSION_DURATION_SECONDS - elapsed)
   }
   if (patch.chatMessages !== undefined) {
     state.chatMessages = patch.chatMessages
@@ -529,8 +548,6 @@ const processedSlotDates = new Set()
 
 /** @type {Record<string, boolean>} */
 const roomTimerStarted = {}
-
-const SESSION_DURATION_SECONDS = 120 * 60
 
 const VALID_DIFFICULTY_PREFS = new Set(["Easy", "Medium", "Hard", "Random"])
 const VALID_TOPIC_PREFS = new Set([
@@ -1321,6 +1338,21 @@ io.on("connection", (socket) => {
   socket.on("question_selected", async ({ roomId, question, userId }) => {
     if (!roomId || !question || !userId) return
 
+    const liveState = await loadRoomLiveState(roomId)
+    const existingQuestion = roomQuestions[roomId] ?? liveState.question
+
+    if (existingQuestion) {
+      roomQuestions[roomId] = existingQuestion
+      console.log(
+        `[question_selected] room ${roomId} already has "${existingQuestion.title}" — ignoring new question`,
+      )
+      io.to(roomId).emit("question_selected", {
+        question: existingQuestion,
+        from: userId,
+      })
+      return
+    }
+
     console.log("[question_selected] received", {
       roomId,
       socketId: socket.id,
@@ -1454,8 +1486,6 @@ io.on("connection", (socket) => {
       roomFirstPeerUserId[roomId] = newInterviewerUserId
       roomFirstPeer[roomId] = userSocketMap[newInterviewerUserId] ?? roomFirstPeer[roomId]
 
-      delete roomQuestions[roomId]
-
       if (!roomPeerDifficultyPrefs[roomId]) {
         roomPeerDifficultyPrefs[roomId] = {}
       }
@@ -1471,8 +1501,6 @@ io.on("connection", (socket) => {
         newInterviewerUserId,
         newIntervieweeUserId,
       })
-
-      sendFetchQuestionToUser(newIntervieweeUserId, roomId, pref, topic)
     },
   )
 
