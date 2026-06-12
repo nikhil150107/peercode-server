@@ -6,6 +6,14 @@ import { Resend } from "resend"
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.resolve(__dirname, "../../.env") })
 
+const BRAND_GREEN = "#10b981"
+const BRAND_DARK = "#09090b"
+const SURFACE = "#18181b"
+const BORDER = "#27272a"
+const TEXT = "#fafafa"
+const TEXT_MUTED = "#a1a1aa"
+const TEXT_SUBTLE = "#71717a"
+
 let resendClient = null
 
 function getResend() {
@@ -46,33 +54,63 @@ function slotIdForTime(slotTime) {
   return SLOT_TIME_TO_ID[slotTime] ?? "slot-6pm"
 }
 
-function emailLayout(title, bodyHtml) {
+function emailLayout({ title, preheader, bodyHtml, cta }) {
+  const ctaBlock = cta
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px 0 0;">
+        <tr>
+          <td style="border-radius:10px;background:${BRAND_GREEN};">
+            <a href="${cta.href}" style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;color:${BRAND_DARK};text-decoration:none;">
+              ${cta.label}
+            </a>
+          </td>
+        </tr>
+      </table>`
+    : ""
+
   return `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="supported-color-schemes" content="dark light" />
+  <title>${title}</title>
+  <!--[if mso]><style>body,table,td{font-family:Arial,sans-serif!important;}</style><![endif]-->
+  <style>
+    @media only screen and (max-width: 620px) {
+      .container { width: 100% !important; }
+      .content { padding: 24px 20px !important; }
+      .hero-title { font-size: 22px !important; line-height: 1.35 !important; }
+    }
+  </style>
 </head>
-<body style="margin:0;padding:0;background:#09090b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#09090b;padding:32px 16px;">
+<body style="margin:0;padding:0;background:${BRAND_DARK};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${preheader ?? title}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND_DARK};padding:32px 12px;">
     <tr>
       <td align="center">
-        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#18181b;border:1px solid #27272a;border-radius:16px;overflow:hidden;">
+        <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:${SURFACE};border:1px solid ${BORDER};border-radius:16px;overflow:hidden;">
           <tr>
-            <td style="padding:28px 32px 8px;">
-              <p style="margin:0;font-size:13px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#34d399;">PeerCode</p>
-              <h1 style="margin:12px 0 0;font-size:22px;font-weight:700;color:#fafafa;line-height:1.3;">${title}</h1>
+            <td style="padding:24px 32px 0;background:linear-gradient(180deg,rgba(16,185,129,0.12) 0%,rgba(16,185,129,0) 100%);">
+              <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:${BRAND_GREEN};">PeerCode</p>
             </td>
           </tr>
           <tr>
-            <td style="padding:8px 32px 24px;color:#a1a1aa;font-size:15px;line-height:1.6;">
+            <td class="content hero-title" style="padding:12px 32px 0;font-size:26px;font-weight:700;line-height:1.3;color:${TEXT};">
+              ${title}
+            </td>
+          </tr>
+          <tr>
+            <td class="content" style="padding:16px 32px 28px;font-size:16px;line-height:1.65;color:${TEXT_MUTED};">
               ${bodyHtml}
+              ${ctaBlock}
             </td>
           </tr>
           <tr>
-            <td style="padding:0 32px 28px;border-top:1px solid #27272a;">
-              <p style="margin:20px 0 0;font-size:13px;color:#71717a;text-align:center;">
-                Made with ❤️ by Nikhil Jatale
+            <td style="padding:20px 32px 28px;border-top:1px solid ${BORDER};background:${BRAND_DARK};">
+              <p style="margin:0;font-size:13px;line-height:1.5;color:${TEXT_SUBTLE};text-align:center;">
+                PeerCode — practice DSA interviews with real peers.<br />
+                <a href="${getClientUrl()}" style="color:${BRAND_GREEN};text-decoration:none;">peercode.live</a>
               </p>
             </td>
           </tr>
@@ -84,12 +122,15 @@ function emailLayout(title, bodyHtml) {
 </html>`
 }
 
-function buttonHtml(href, label) {
-  return `<p style="margin:24px 0 0;">
-    <a href="${href}" style="display:inline-block;background:#10b981;color:#09090b;font-weight:600;font-size:14px;text-decoration:none;padding:12px 24px;border-radius:8px;">
-      ${label}
-    </a>
-  </p>`
+function infoCard(label, value) {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0 0;background:${BRAND_DARK};border:1px solid ${BORDER};border-radius:12px;">
+    <tr>
+      <td style="padding:16px 18px;">
+        <p style="margin:0 0 4px;font-size:12px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:${TEXT_SUBTLE};">${label}</p>
+        <p style="margin:0;font-size:17px;font-weight:600;line-height:1.4;color:${TEXT};">${value}</p>
+      </td>
+    </tr>
+  </table>`
 }
 
 async function sendEmail(to, subject, html) {
@@ -129,11 +170,13 @@ export async function sendBookingConfirmation(
   const dateLabel = formatDateLabel(date)
   const dateAndTime = `${dateLabel} at ${slotTime} IST`
 
-  const html = emailLayout(
-    "Slot booked",
-    `<p>Your slot has been booked for <strong style="color:#fafafa;">${dateAndTime}</strong>.</p>
-     <p>We'll notify you as soon as a peer is matched!</p>`,
-  )
+  const html = emailLayout({
+    title: "Your slot is booked",
+    preheader: `PeerCode session booked for ${dateAndTime}`,
+    bodyHtml: `<p style="margin:0 0 12px;">You're all set for your next mock interview session.</p>
+      ${infoCard("Session time", dateAndTime)}
+      <p style="margin:20px 0 0;">We'll email you as soon as a peer is matched. Join from the dashboard when it's time.</p>`,
+  })
 
   return sendEmail(userEmail, "Slot Booked — PeerCode", html)
 }
@@ -152,13 +195,15 @@ export async function sendMatchConfirmation(
   const interviewUrl = `${getClientUrl()}/interview?room=${roomId}`
   const subject = "Peer Matched — PeerCode"
 
-  const html = emailLayout(
-    "Peer matched",
-    `<p>Great news! You've been matched with a peer for your session at <strong style="color:#fafafa;">${slotTime} IST</strong>.</p>
-     <p>Click here to join:</p>
-     ${buttonHtml(interviewUrl, "Join room")}
-     <p style="margin-top:16px;font-size:13px;color:#71717a;word-break:break-all;">${interviewUrl}</p>`,
-  )
+  const html = emailLayout({
+    title: "You've been matched!",
+    preheader: `Join your PeerCode interview room for ${slotTime} IST`,
+    bodyHtml: `<p style="margin:0 0 12px;">Great news — a peer is ready for your session at <strong style="color:${TEXT};">${slotTime} IST</strong>.</p>
+      ${infoCard("Interview room", roomId)}
+      <p style="margin:20px 0 0;">Open the room a few minutes early to test your camera and mic. One of you will interview while the other codes, then you'll swap roles mid-session.</p>
+      <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:${TEXT_SUBTLE};word-break:break-all;">Direct link: ${interviewUrl}</p>`,
+    cta: { href: interviewUrl, label: "Join interview room" },
+  })
 
   const [result1, result2] = await Promise.all([
     sendEmail(user1Email, subject, html),
@@ -179,17 +224,17 @@ export async function sendNoMatchFound(
   const whenLabel = isToday ? "today" : `on ${formatDateLabel(slotDate)}`
   const greetingName = userName?.trim() || "there"
 
-  const html = emailLayout(
-    "No peer match this time",
-    `<p>Hey <strong style="color:#fafafa;">${greetingName}</strong>! 👋</p>
-     <p>We're sorry — we weren't able to find a peer for your session at <strong style="color:#fafafa;">${slotTime}</strong> ${whenLabel}. 😔</p>
-     <p>But don't worry! The more people who join PeerCode, the better the chances of getting matched instantly.</p>
-     <p>👉 Share PeerCode with your friends and classmates:<br />
-     <a href="${shareUrl}" style="color:#34d399;">${shareUrl}</a></p>
-     <p>The more peers join, the faster everyone gets matched!</p>
-     <p>We'll see you at the next slot. Keep grinding! 💪</p>
-     <p>— Team PeerCode</p>`,
-  )
+  const html = emailLayout({
+    title: "No peer match this time",
+    preheader: `We couldn't find a peer for your ${slotTime} session`,
+    bodyHtml: `<p style="margin:0 0 12px;">Hey <strong style="color:${TEXT};">${greetingName}</strong>,</p>
+      <p style="margin:0 0 12px;">We weren't able to find a peer for your session at <strong style="color:${TEXT};">${slotTime}</strong> ${whenLabel}.</p>
+      ${infoCard("What you can do", "Book the next slot or invite friends to join PeerCode")}
+      <p style="margin:20px 0 0;">The more engineers on PeerCode, the faster matching gets for everyone. Share the link with classmates and interview prep groups:</p>
+      <p style="margin:12px 0 0;"><a href="${shareUrl}" style="color:${BRAND_GREEN};font-weight:600;text-decoration:none;">${shareUrl}</a></p>
+      <p style="margin:20px 0 0;">We'll see you at the next slot. Keep grinding!</p>`,
+    cta: { href: shareUrl, label: "Share PeerCode" },
+  })
 
   return sendEmail(
     userEmail,
@@ -197,3 +242,5 @@ export async function sendNoMatchFound(
     html,
   )
 }
+
+export { slotIdForTime, formatDateLabel }

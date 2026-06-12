@@ -139,7 +139,7 @@ app.post("/api/feedback", handleFeedback)
 
 async function handleExecute(req, res) {
   try {
-    const { code, language, stdin } = req.body ?? {}
+    const { code, language, language_id, languageId, stdin } = req.body ?? {}
 
     if (!code || typeof code !== "string") {
       return res.status(400).json({
@@ -148,14 +148,21 @@ async function handleExecute(req, res) {
       })
     }
 
-    if (!language) {
+    const resolvedLanguageId =
+      language_id ?? languageId ?? (language ? undefined : null)
+
+    if (resolvedLanguageId == null && !language) {
       return res.status(400).json({
         ok: false,
-        error: "language is required (python, javascript, java, cpp)",
+        error: "language or language_id is required",
       })
     }
 
-    const result = await executeOnJudge0(code, language, stdin ?? "")
+    const result = await executeOnJudge0(
+      code,
+      resolvedLanguageId ?? language,
+      stdin ?? "",
+    )
 
     return res.json({
       ok: true,
