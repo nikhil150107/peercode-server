@@ -225,11 +225,10 @@ async function handleSessionRatingReceived(req, res) {
       const { data, error } = await supabase
         .from("sessions")
         .update({
-          rating: ratingValue,
           rating_received: ratingValue,
         })
         .eq("id", existing.id)
-        .select("id, user_id, rating, rating_received")
+        .select("id, user_id, rating_received")
         .single()
 
       if (error) {
@@ -245,10 +244,9 @@ async function handleSessionRatingReceived(req, res) {
           user_id: peerId,
           room_id: roomId,
           peer_id: typeof raterUserId === "string" ? raterUserId : null,
-          rating: ratingValue,
           rating_received: ratingValue,
         })
-        .select("id, user_id, rating, rating_received")
+        .select("id, user_id, rating_received")
         .single()
 
       if (error) {
