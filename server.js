@@ -195,6 +195,8 @@ function defaultRoomLiveState() {
     chatMessages: [],
     ended: false,
     endedBy: null,
+    interviewerUserId: null,
+    intervieweeUserId: null,
   }
 }
 
@@ -203,14 +205,21 @@ const roomLiveCache = {}
 
 const SESSION_DURATION_SECONDS = 120 * 60
 
-function toClientRoomState(state) {
+function getUserRoleFromState(state, userId) {
+  if (!userId) return null
+  if (state.interviewerUserId === userId) return "interviewer"
+  if (state.intervieweeUserId === userId) return "interviewee"
+  return null
+}
+
+function toClientRoomState(state, userId = null) {
   let secondsLeft = state.secondsLeft ?? SESSION_DURATION_SECONDS
   if (state.timerStarted && state.timerStartedAt) {
     const elapsed = Math.floor((Date.now() - state.timerStartedAt) / 1000)
     secondsLeft = Math.max(0, SESSION_DURATION_SECONDS - elapsed)
   }
 
-  return {
+  const clientState = {
     question: state.question,
     codes: state.codes ?? {},
     language: state.language ?? "python",
@@ -219,7 +228,15 @@ function toClientRoomState(state) {
     timerStartedAt: state.timerStartedAt ?? null,
     chatMessages: state.chatMessages ?? [],
     ended: Boolean(state.ended),
+    interviewerUserId: state.interviewerUserId ?? null,
+    intervieweeUserId: state.intervieweeUserId ?? null,
   }
+
+  if (userId) {
+    clientState.myRole = getUserRoleFromState(state, userId)
+  }
+
+  return clientState
 }
 
 async function loadRoomLiveState(roomId) {
@@ -258,6 +275,8 @@ async function loadRoomLiveState(roomId) {
       chatMessages: data.chat_messages ?? [],
       ended: Boolean(data.ended_at),
       endedBy: data.ended_by ?? null,
+      interviewerUserId: data.interviewer_user_id ?? null,
+      intervieweeUserId: data.interviewee_user_id ?? null,
     }
 
     roomLiveCache[roomId] = state
@@ -288,6 +307,8 @@ async function persistRoomLiveState(roomId, state) {
       chat_messages: state.chatMessages ?? [],
       ended_at: state.ended ? new Date().toISOString() : null,
       ended_by: state.endedBy ?? null,
+      interviewer_user_id: state.interviewerUserId ?? null,
+      interviewee_user_id: state.intervieweeUserId ?? null,
       updated_at: new Date().toISOString(),
     }
 
@@ -328,18 +349,158 @@ async function patchRoomLiveState(roomId, patch) {
   }
   if (patch.ended !== undefined) state.ended = patch.ended
   if (patch.endedBy !== undefined) state.endedBy = patch.endedBy
+  const forceRoles = Boolean(patch.forceRoles)
+
+  if (patch.interviewerUserId !== undefined) {
+    if (
+      forceRoles ||
+      !state.interviewerUserId ||
+      patch.interviewerUserId === state.interviewerUserId
+    ) {
+      state.interviewerUserId = patch.interviewerUserId
+    }
+  }
+  if (patch.intervieweeUserId !== undefined) {
+    if (
+      forceRoles ||
+      !state.intervieweeUserId ||
+      patch.intervieweeUserId === state.intervieweeUserId
+    ) {
+      state.intervieweeUserId = patch.intervieweeUserId
+    }
+  }
   await persistRoomLiveState(roomId, state)
   return state
+}
+
+function invalidateRoomLiveCache(roomId) {
+  delete roomLiveCache[roomId]
+}
+
+async function tryClaimRoleSlot(roomId, userId, slot) {
+  const column =
+    slot === "interviewer" ? "interviewer_user_id" : "interviewee_user_id"
+  const field =
+    slot === "interviewer" ? "interviewerUserId" : "intervieweeUserId"
+
+  invalidateRoomLiveCache(roomId)
+  const before = await loadRoomLiveState(roomId)
+
+  if (before.interviewerUserId === userId) return "interviewer"
+  if (before.intervieweeUserId === userId) return "interviewee"
+  if (before[field]) return null
+  if (slot === "interviewee" && before.interviewerUserId === userId) {
+    return null
+  }
+
+  if (!supabase) {
+    if (before[field]) return null
+    await patchRoomLiveState(roomId, { [field]: userId })
+    invalidateRoomLiveCache(roomId)
+    const after = await loadRoomLiveState(roomId)
+    return after[field] === userId ? slot : null
+  }
+
+  await supabase.from("room_live_state").upsert(
+    {
+      room_id: roomId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "room_id", ignoreDuplicates: true },
+  )
+
+  const { data, error } = await supabase
+    .from("room_live_state")
+    .update({
+      [column]: userId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("room_id", roomId)
+    .is(column, null)
+    .select("interviewer_user_id, interviewee_user_id")
+    .maybeSingle()
+
+  if (error) {
+    console.error("[roles] claim failed:", error.message)
+    return null
+  }
+
+  if (!data || data[column] !== userId) {
+    return null
+  }
+
+  invalidateRoomLiveCache(roomId)
+  return slot
+}
+
+async function assignOrRestoreRole(roomId, userId) {
+  invalidateRoomLiveCache(roomId)
+  let state = await loadRoomLiveState(roomId)
+
+  const existing = getUserRoleFromState(state, userId)
+  if (existing) {
+    return {
+      role: existing,
+      isFirstPeer: existing === "interviewer",
+    }
+  }
+
+  if (state.interviewerUserId && state.intervieweeUserId) {
+    console.warn("[roles] both roles assigned but user unknown", {
+      roomId,
+      userId,
+      interviewerUserId: state.interviewerUserId,
+      intervieweeUserId: state.intervieweeUserId,
+    })
+    return { role: "interviewee", isFirstPeer: false }
+  }
+
+  const interviewerClaim = await tryClaimRoleSlot(roomId, userId, "interviewer")
+  if (interviewerClaim === "interviewer") {
+    return { role: "interviewer", isFirstPeer: true }
+  }
+
+  invalidateRoomLiveCache(roomId)
+  state = await loadRoomLiveState(roomId)
+  const restored = getUserRoleFromState(state, userId)
+  if (restored) {
+    return {
+      role: restored,
+      isFirstPeer: restored === "interviewer",
+    }
+  }
+
+  const intervieweeClaim = await tryClaimRoleSlot(roomId, userId, "interviewee")
+  if (intervieweeClaim === "interviewee") {
+    return { role: "interviewee", isFirstPeer: false }
+  }
+
+  invalidateRoomLiveCache(roomId)
+  state = await loadRoomLiveState(roomId)
+  const finalRole = getUserRoleFromState(state, userId)
+  if (finalRole) {
+    return {
+      role: finalRole,
+      isFirstPeer: finalRole === "interviewer",
+    }
+  }
+
+  console.warn("[roles] fallback interviewee assignment", { roomId, userId })
+  return { role: "interviewee", isFirstPeer: false }
 }
 
 async function handleGetRoomState(req, res) {
   try {
     const { roomId } = req.params
+    const userId = req.query.userId ?? null
     if (!roomId) {
       return res.status(400).json({ ok: false, error: "roomId is required" })
     }
     const state = await loadRoomLiveState(roomId)
-    return res.json({ ok: true, state: toClientRoomState(state) })
+    return res.json({
+      ok: true,
+      state: toClientRoomState(state, userId),
+    })
   } catch (err) {
     console.error("[room_state] GET failed:", err)
     return res.status(500).json({ ok: false, error: "Failed to load room state" })
@@ -374,7 +535,11 @@ async function handlePutRoomState(req, res) {
       return res.status(410).json({ ok: false, error: "Session has ended" })
     }
 
-    const state = await patchRoomLiveState(roomId, patch ?? {})
+    const safePatch = { ...(patch ?? {}) }
+    delete safePatch.interviewerUserId
+    delete safePatch.intervieweeUserId
+
+    const state = await patchRoomLiveState(roomId, safePatch)
     console.log("[room_state] saved", { roomId, userId })
     return res.json({ ok: true, state: toClientRoomState(state) })
   } catch (err) {
@@ -647,6 +812,11 @@ function sendFetchQuestionToUser(
 }
 
 function getIntervieweeUserId(roomId) {
+  const liveState = roomLiveCache[roomId]
+  if (liveState?.intervieweeUserId) {
+    return liveState.intervieweeUserId
+  }
+
   const peers = roomPeers[roomId]
   const firstUserId = roomFirstPeerUserId[roomId]
   if (!peers || !firstUserId) return null
@@ -1252,27 +1422,30 @@ io.on("connection", (socket) => {
     roomPeers[roomId].set(userId, socket.id)
     userSocketMap[userId] = socket.id
 
-    if (!roomFirstPeer[roomId]) {
-      roomFirstPeer[roomId] = socket.id
-      roomFirstPeerUserId[roomId] = userId
-      console.log(`[join_room] ${userId} is first peer in room ${roomId}`)
+    const roleInfo = await assignOrRestoreRole(roomId, userId)
+    const roleState = await loadRoomLiveState(roomId)
+    if (roleState.interviewerUserId) {
+      roomFirstPeerUserId[roomId] = roleState.interviewerUserId
+      roomFirstPeer[roomId] =
+        userSocketMap[roleState.interviewerUserId] ?? roomFirstPeer[roomId]
     }
 
     const peers = Array.from(roomPeers[roomId].keys())
-    const isFirstPeer = roomFirstPeer[roomId] === socket.id
     console.log(`[join_room] ${userId} joined room ${roomId} (${peers.length}/2)`, {
-      isFirstPeer,
+      role: roleInfo.role,
+      isFirstPeer: roleInfo.isFirstPeer,
     })
 
     socket.emit("room_joined", {
       roomId,
       peerCount: peers.length,
-      isFirstPeer,
+      role: roleInfo.role,
+      isFirstPeer: roleInfo.isFirstPeer,
     })
 
     socket.emit("room_state_sync", {
       roomId,
-      state: toClientRoomState(liveState),
+      state: toClientRoomState(roleState, userId),
     })
 
     if (prevPeerCount === 1 && peers.length === 2) {
@@ -1454,7 +1627,7 @@ io.on("connection", (socket) => {
 
   socket.on(
     "swap_roles",
-    ({
+    async ({
       roomId,
       newIntervieweeUserId,
       newIntervieweeDifficulty,
@@ -1469,7 +1642,9 @@ io.on("connection", (socket) => {
         ? newIntervieweeTopic
         : "Any"
 
-      const newInterviewerUserId = getIntervieweeUserId(roomId)
+      const roleState = await loadRoomLiveState(roomId)
+      const newInterviewerUserId =
+        roleState.intervieweeUserId ?? getIntervieweeUserId(roomId)
       if (!newInterviewerUserId) {
         console.log(`[swap_roles] cannot swap — room ${roomId} missing peers`)
         return
@@ -1483,8 +1658,15 @@ io.on("connection", (socket) => {
         newIntervieweeTopic: topic,
       })
 
+      await patchRoomLiveState(roomId, {
+        interviewerUserId: newInterviewerUserId,
+        intervieweeUserId: newIntervieweeUserId,
+        forceRoles: true,
+      })
+
       roomFirstPeerUserId[roomId] = newInterviewerUserId
-      roomFirstPeer[roomId] = userSocketMap[newInterviewerUserId] ?? roomFirstPeer[roomId]
+      roomFirstPeer[roomId] =
+        userSocketMap[newInterviewerUserId] ?? roomFirstPeer[roomId]
 
       if (!roomPeerDifficultyPrefs[roomId]) {
         roomPeerDifficultyPrefs[roomId] = {}
