@@ -827,11 +827,13 @@ function getIntervieweeUserId(roomId) {
   return null
 }
 
-function maybeTriggerQuestionFetch(roomId) {
+async function maybeTriggerQuestionFetch(roomId) {
   if (roomQuestions[roomId]) return
   if (!roomPeers[roomId] || roomPeers[roomId].size < 2) return
 
-  const intervieweeUserId = getIntervieweeUserId(roomId)
+  const liveState = await loadRoomLiveState(roomId)
+  const intervieweeUserId =
+    liveState.intervieweeUserId ?? getIntervieweeUserId(roomId)
   if (!intervieweeUserId) return
 
   const pref = roomPeerDifficultyPrefs[roomId]?.[intervieweeUserId]
