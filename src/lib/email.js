@@ -35,8 +35,10 @@ function getClientUrl() {
 const SLOT_TIME_TO_ID = {
   "10:00 AM": "slot-10am",
   "12:00 PM": "slot-12pm",
-  "3:00 PM": "slot-3pm",
+  "2:00 PM": "slot-2pm",
+  "4:00 PM": "slot-4pm",
   "6:00 PM": "slot-6pm",
+  "8:00 PM": "slot-8pm",
   "10:00 PM": "slot-10pm",
 }
 
@@ -51,7 +53,7 @@ function formatDateLabel(dateStr) {
 }
 
 function slotIdForTime(slotTime) {
-  return SLOT_TIME_TO_ID[slotTime] ?? "slot-6pm"
+  return SLOT_TIME_TO_ID[slotTime] ?? "slot-10am"
 }
 
 function emailLayout({ title, preheader, bodyHtml, cta }) {
