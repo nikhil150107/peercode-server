@@ -1538,7 +1538,7 @@ io.on("connection", (socket) => {
 
   socket.on(
     "request_question",
-    ({ roomId, userId, difficultyPreference, topicPreference }) => {
+    async ({ roomId, userId, difficultyPreference, topicPreference }) => {
     if (!roomId || !userId) return
 
     const pref = VALID_DIFFICULTY_PREFS.has(difficultyPreference)
@@ -1592,7 +1592,7 @@ io.on("connection", (socket) => {
     console.log(
       `[request_question] no question yet for ${socket.id}, waiting for both peers`,
     )
-    maybeTriggerQuestionFetch(roomId)
+    void maybeTriggerQuestionFetch(roomId)
   },
   )
 
