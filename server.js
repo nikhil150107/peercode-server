@@ -874,6 +874,12 @@ async function maybeTriggerQuestionFetch(roomId) {
   if (!roomPeers[roomId] || roomPeers[roomId].size < 2) return
 
   const liveState = await loadRoomLiveState(roomId)
+  if (liveState.question) {
+    roomQuestions[roomId] = liveState.question
+    console.log("[question] already exists, skipping fetch")
+    return
+  }
+
   const intervieweeUserId =
     liveState.intervieweeUserId ?? getIntervieweeUserId(roomId)
   if (!intervieweeUserId) return
@@ -1570,6 +1576,19 @@ io.on("connection", (socket) => {
       return
     }
 
+    const liveState = await loadRoomLiveState(roomId)
+    if (liveState.question) {
+      roomQuestions[roomId] = liveState.question
+      console.log(
+        `[request_question] sending persisted question to ${socket.id}:`,
+        liveState.question.title,
+      )
+      socket.emit("question_selected", {
+        question: liveState.question,
+      })
+      return
+    }
+
     console.log(
       `[request_question] no question yet for ${socket.id}, waiting for both peers`,
     )
@@ -1696,20 +1715,8 @@ io.on("connection", (socket) => {
 
   socket.on(
     "swap_roles",
-    async ({
-      roomId,
-      newIntervieweeUserId,
-      newIntervieweeDifficulty,
-      newIntervieweeTopic,
-    }) => {
+    async ({ roomId, newIntervieweeUserId }) => {
       if (!roomId || !newIntervieweeUserId) return
-
-      const pref = VALID_DIFFICULTY_PREFS.has(newIntervieweeDifficulty)
-        ? newIntervieweeDifficulty
-        : "Random"
-      const topic = VALID_TOPIC_PREFS.has(newIntervieweeTopic)
-        ? newIntervieweeTopic
-        : "Any"
 
       const roleState = await loadRoomLiveState(roomId)
       const newInterviewerUserId =
@@ -1719,12 +1726,10 @@ io.on("connection", (socket) => {
         return
       }
 
-      console.log("[swap_roles] swapping roles in room", {
+      console.log("[swap_roles] swapping roles only", {
         roomId,
         newInterviewerUserId,
         newIntervieweeUserId,
-        newIntervieweeDifficulty: pref,
-        newIntervieweeTopic: topic,
       })
 
       await patchRoomLiveState(roomId, {
@@ -1736,17 +1741,6 @@ io.on("connection", (socket) => {
       roomFirstPeerUserId[roomId] = newInterviewerUserId
       roomFirstPeer[roomId] =
         userSocketMap[newInterviewerUserId] ?? roomFirstPeer[roomId]
-
-      if (!roomPeerDifficultyPrefs[roomId]) {
-        roomPeerDifficultyPrefs[roomId] = {}
-      }
-      if (!roomPeerTopicPrefs[roomId]) {
-        roomPeerTopicPrefs[roomId] = {}
-      }
-      roomPeerDifficultyPrefs[roomId][newIntervieweeUserId] = pref
-      roomPeerTopicPrefs[roomId][newIntervieweeUserId] = topic
-      roomDifficultyPref[roomId] = pref
-      roomTopicPref[roomId] = topic
 
       io.to(roomId).emit("roles_swapped", {
         newInterviewerUserId,
