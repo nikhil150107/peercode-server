@@ -590,6 +590,39 @@ async function handlePutRoomState(req, res) {
   }
 }
 
+async function buildSessionEndedPayload(roomId, fromUserId = null) {
+  const liveState = await loadRoomLiveState(roomId)
+  const question = roomQuestions[roomId] ?? liveState.question
+
+  let durationSeconds = 0
+  if (liveState.timerStarted && liveState.timerStartedAt) {
+    durationSeconds = Math.floor((Date.now() - liveState.timerStartedAt) / 1000)
+  } else if (liveState.secondsLeft != null) {
+    durationSeconds = Math.max(
+      0,
+      SESSION_DURATION_SECONDS - liveState.secondsLeft,
+    )
+  }
+
+  return {
+    roomId,
+    from: fromUserId ?? null,
+    questionTitle: question?.title ?? null,
+    questionDifficulty: question?.difficulty ?? null,
+    questionTopic: question?.topic ?? null,
+    durationSeconds,
+    interviewerUserId: liveState.interviewerUserId ?? null,
+    intervieweeUserId: liveState.intervieweeUserId ?? null,
+  }
+}
+
+async function emitSessionEnded(roomId, fromUserId = null) {
+  const payload = await buildSessionEndedPayload(roomId, fromUserId)
+  io.to(roomId).emit("session_ended", payload)
+  console.log("[session] session_ended emitted", payload)
+  return payload
+}
+
 async function handleEndRoomSession(req, res) {
   try {
     const { roomId } = req.params
@@ -604,7 +637,7 @@ async function handleEndRoomSession(req, res) {
       endedBy: userId ?? null,
     })
 
-    io.to(roomId).emit("session_ended", { roomId, from: userId ?? null })
+    await emitSessionEnded(roomId, userId ?? null)
     console.log("[room_state] session ended", { roomId, userId })
 
     return res.json({ ok: true, state: toClientRoomState(state) })
@@ -1441,8 +1474,9 @@ io.on("connection", (socket) => {
 
     const liveState = await loadRoomLiveState(roomId)
     if (liveState.ended) {
-      console.log(`[join_room] room ${roomId} has ended — rejecting ${userId}`)
-      socket.emit("session_ended", { roomId })
+      console.log(`[join_room] room ${roomId} has ended — sending ${userId} to feedback`)
+      const payload = await buildSessionEndedPayload(roomId, liveState.endedBy)
+      socket.emit("session_ended", payload)
       return
     }
 
@@ -1709,7 +1743,7 @@ io.on("connection", (socket) => {
       endedBy: userId ?? null,
     })
 
-    io.to(roomId).emit("session_ended", { roomId, from: userId ?? null })
+    await emitSessionEnded(roomId, userId ?? null)
     console.log(`[session] ended via socket in room ${roomId}`, { userId })
   })
 
