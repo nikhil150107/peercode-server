@@ -111,7 +111,7 @@ function emailLayout({ title, preheader, bodyHtml, cta }) {
           <tr>
             <td style="padding:20px 32px 28px;border-top:1px solid ${BORDER};background:${BRAND_DARK};">
               <p style="margin:0;font-size:13px;line-height:1.5;color:${TEXT_SUBTLE};text-align:center;">
-                PeerCode — practice DSA interviews with real peers.<br />
+                PeerCode — mock interviews with other students.<br />
                 <a href="${getClientUrl()}" style="color:${BRAND_GREEN};text-decoration:none;">peercode.live</a>
               </p>
             </td>
@@ -173,14 +173,14 @@ export async function sendBookingConfirmation(
   const dateAndTime = `${dateLabel} at ${slotTime} IST`
 
   const html = emailLayout({
-    title: "Your slot is booked",
-    preheader: `PeerCode session booked for ${dateAndTime}`,
-    bodyHtml: `<p style="margin:0 0 12px;">You're all set for your next mock interview session.</p>
-      ${infoCard("Session time", dateAndTime)}
-      <p style="margin:20px 0 0;">We'll email you as soon as a peer is matched. Join from the dashboard when it's time.</p>`,
+    title: "You're booked in",
+    preheader: `PeerCode session at ${dateAndTime}`,
+    bodyHtml: `<p style="margin:0 0 12px;">Your slot for ${dateAndTime} is confirmed.</p>
+      ${infoCard("When", dateAndTime)}
+      <p style="margin:20px 0 0;">I'll email you again when we find you a peer. On session day, head to the dashboard and join from there.</p>`,
   })
 
-  return sendEmail(userEmail, "Slot Booked — PeerCode", html)
+  return sendEmail(userEmail, "Booked — PeerCode", html)
 }
 
 export async function sendMatchConfirmation(
@@ -195,16 +195,16 @@ export async function sendMatchConfirmation(
     `[email] sendMatchConfirmation called — user1=${user1Email} user2=${user2Email} room=${roomId}`,
   )
   const interviewUrl = `${getClientUrl()}/interview?room=${roomId}`
-  const subject = "Peer Matched — PeerCode"
+  const subject = "Matched — PeerCode"
 
   const html = emailLayout({
-    title: "You've been matched!",
-    preheader: `Join your PeerCode interview room for ${slotTime} IST`,
-    bodyHtml: `<p style="margin:0 0 12px;">Great news — a peer is ready for your session at <strong style="color:${TEXT};">${slotTime} IST</strong>.</p>
-      ${infoCard("Interview room", roomId)}
-      <p style="margin:20px 0 0;">Open the room a few minutes early to test your camera and mic. One of you will interview while the other codes, then you'll swap roles mid-session.</p>
-      <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:${TEXT_SUBTLE};word-break:break-all;">Direct link: ${interviewUrl}</p>`,
-    cta: { href: interviewUrl, label: "Join interview room" },
+    title: "You have a match",
+    preheader: `Join your PeerCode room for ${slotTime} IST`,
+    bodyHtml: `<p style="margin:0 0 12px;">Someone booked the same slot as you. Your session is at <strong style="color:${TEXT};">${slotTime} IST</strong>.</p>
+      ${infoCard("Room", roomId)}
+      <p style="margin:20px 0 0;">Join a few minutes early and check your mic and camera. One of you interviews first, then you swap halfway through.</p>
+      <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:${TEXT_SUBTLE};word-break:break-all;">Link: ${interviewUrl}</p>`,
+    cta: { href: interviewUrl, label: "Join room" },
   })
 
   const [result1, result2] = await Promise.all([
@@ -227,20 +227,20 @@ export async function sendNoMatchFound(
   const greetingName = userName?.trim() || "there"
 
   const html = emailLayout({
-    title: "No peer match this time",
-    preheader: `We couldn't find a peer for your ${slotTime} session`,
-    bodyHtml: `<p style="margin:0 0 12px;">Hey <strong style="color:${TEXT};">${greetingName}</strong>,</p>
-      <p style="margin:0 0 12px;">We weren't able to find a peer for your session at <strong style="color:${TEXT};">${slotTime}</strong> ${whenLabel}.</p>
-      ${infoCard("What you can do", "Book the next slot or invite friends to join PeerCode")}
-      <p style="margin:20px 0 0;">The more engineers on PeerCode, the faster matching gets for everyone. Share the link with classmates and interview prep groups:</p>
+    title: "No match this time",
+    preheader: `Couldn't find a peer for ${slotTime}`,
+    bodyHtml: `<p style="margin:0 0 12px;">Hey ${greetingName},</p>
+      <p style="margin:0 0 12px;">Nobody else booked your ${slotTime} slot ${whenLabel}, so we couldn't pair you up.</p>
+      ${infoCard("Try this", "Book the next slot or bring a friend")}
+      <p style="margin:20px 0 0;">More people on PeerCode means faster matching for everyone. If you know someone prepping for interviews, send them the link:</p>
       <p style="margin:12px 0 0;"><a href="${shareUrl}" style="color:${BRAND_GREEN};font-weight:600;text-decoration:none;">${shareUrl}</a></p>
-      <p style="margin:20px 0 0;">We'll see you at the next slot. Keep grinding!</p>`,
+      <p style="margin:20px 0 0;">Catch you at the next slot.</p>`,
     cta: { href: shareUrl, label: "Share PeerCode" },
   })
 
   return sendEmail(
     userEmail,
-    "We couldn't find a peer this time — PeerCode",
+    "No match this time — PeerCode",
     html,
   )
 }
